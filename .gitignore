@@ -1,3 +1,13 @@
+**/*.ipynb_checkpoints
+**/*__pycache__
+**/*build
+**/*dist
+**/*src
+**/*.vscode
+**/*checkpoints
+**/*checkpts
+**/*gpu_logs
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
