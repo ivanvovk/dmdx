@@ -2,13 +2,21 @@
 
 import copy
 import librosa
-import multiprocessing as mp
 import numpy as np
+
+import multiprocessing as mp
+from multiprocessing.dummy import Pool as ThreadPool
+
 import jax.numpy as npjax
 from jax import jit, device_put
+
 from tqdm import tqdm
 
 from .autils import frames_to_wave
+
+
+def to_mel_scale(f):
+    return 2595 * np.log10(1 + f/700)
 
 
 class DMD(object):
@@ -21,7 +29,8 @@ class DMD(object):
         opt='projected',
         lag=1,
         delta_t=1,
-        use_jax_opt=True
+        use_jax_opt=True,
+        use_mel_scale=True
     ):
         """
         Constructor function.
@@ -30,18 +39,12 @@ class DMD(object):
         :param lag: which shift to choose for linear dynamic system X1 = A_tilde @ X0
         :param delta_t: time difference between 2 snapshots
         :param use_jax_opt: enable JAX numerical algebra optimizations (jit, running on GPU)
+        :param use_mel_scale: whether to convert frequencies to the mel scale or not
         """
         self.svd_rank = svd_rank
         self.opt = opt
         self.lag = lag
         self.delta_t = delta_t
-        
-        self.time_series_size = None
-        self.modes = None
-        self.eigvals = None
-        self.fitted = False
-        
-        self.method = None
         self.use_jax_opt = use_jax_opt
         if self.use_jax_opt:
             self._DOT = jit(lambda X, Y: X @ Y)
@@ -51,6 +54,14 @@ class DMD(object):
             self._DOT = lambda X, Y: np.dot(X, Y)
             self._ELEMWISE_DOT = lambda X, y: X * y
             self._COMPUTE_SVD = np.linalg.svd
+        self.use_mel_scale = use_mel_scale
+        
+        self.time_series_size = None
+        self.modes = None
+        self.eigvals = None
+        self.fitted = False
+        
+        self.method = None
         
     def _optimized_dot(X, Y):
         return X
@@ -146,6 +157,7 @@ class STDMD(object):
         lag=1,
         n_jobs=-1,
         use_jax_opt=True,
+        use_mel_scale=False,
         verbose=True
     ):
         """
@@ -158,6 +170,7 @@ class STDMD(object):
         :param lag: which shift to choose for linear dynamic system X1 = A_tilde @ X0
         :param n_jobs: how much processes to parallelize computation into
         :param use_jax_opt: enable JAX numerical algebra optimizations (jit, running on GPU)
+        :param use_mel_scale: whether to convert frequencies to the mel scale or not
         :param verbose: use crossbar to show process compliteness
         """
         self.frame_length = frame_length
@@ -171,6 +184,7 @@ class STDMD(object):
         _n_cpus = mp.cpu_count()
         self.n_jobs = _n_cpus if n_jobs == -1 or n_jobs >= _n_cpus else n_jobs
         self.use_jax_opt = use_jax_opt
+        self.use_mel_scale = use_mel_scale
         self.verbose = verbose
         
         self.rank = self.n_channels
@@ -191,7 +205,9 @@ class STDMD(object):
             svd_rank=self.rank,
             opt=self.opt,
             lag=self.lag,
-            delta_t=self.hl / self.sampling_rate
+            delta_t=self.hl / self.sampling_rate,
+            use_jax_opt = self.use_jax_opt,
+            use_mel_scale = self.use_mel_scale
         )
         dmd.fit(subframes)
 
@@ -201,7 +217,10 @@ class STDMD(object):
         positive_mask = freqs >= 0
         freqs = freqs[positive_mask]
         sorted_idx = np.argsort(freqs)[:self.n_channels]
-        freqs = np.round(freqs[sorted_idx] / (self.sampling_rate / 1.9) * self.n_channels).astype(int)
+        freqs = freqs[sorted_idx]
+        if self.use_mel_scale:
+            freqs = to_mel_scale(freqs)
+        freqs = np.round(freqs / (self.sampling_rate / 1.95) * self.n_channels).astype(int)
         amplitudes = np.abs(dmd.b[positive_mask][sorted_idx])
         _frame[freqs] = amplitudes
         return _frame
@@ -217,7 +236,7 @@ class STDMD(object):
             hop_length=self.hop_length, axis=0
         ).astype(np.float32)
         
-        with mp.Pool(processes=self.n_jobs) as pool:
+        with ThreadPool(processes=self.n_jobs) as pool:
             dmdgram = list(tqdm(pool.imap(self._process_frame, frames), total=len(frames))) \
-                if self.verbose else pool.imap(self._process_frame, frames)
+                if self.verbose else pool.map(self._process_frame, frames)
         return np.array(dmdgram, dtype=np.float32)
