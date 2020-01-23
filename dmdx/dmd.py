@@ -1,6 +1,5 @@
 # Copyright (c) Ivan Vovk, 2019-2020. All rights reserved.
 
-import copy
 import librosa
 import numpy as np
 from tqdm import tqdm
@@ -10,16 +9,16 @@ from multiprocessing.dummy import Pool as ThreadPool
 
 try:
     import jax.numpy as npjax
-    from jax import jit, device_put
+    from jax import jit
     from jax.lib import xla_bridge
     if xla_bridge.get_backend().platform == 'cpu':
-        print('No GPU available. All computations will be ran on CPU.')
+        print('No GPU available. All computations will be ran on CPU, but using JIT-compiler.')
     JAX_BUILD_INSTALLED = True
 except ImportError as e:
-    print('No JAX installed. Running computations with the standard CPU-backed `numpy` package.')
+    print('No JAX installed. All computations will be ran with the standard CPU-backed `numpy` package.')
     JAX_BUILD_INSTALLED = False
 
-from .autils import frames_to_wave
+from .utils import frames_to_wave
 
 
 class DMD(object):
@@ -40,14 +39,14 @@ class DMD(object):
         :param opt: how to calculate modes - by default or project on denoised data
         :param lag: which shift to choose for linear dynamic system X1 = A_tilde @ X0
         :param delta_t: time difference between 2 snapshots
-        :param use_jax_opt: enable JAX numerical algebra optimizations (jit, running on GPU)
+        :param use_jax_opt: enable JAX numerical algebra optimizations (jit, running on GPU), if available
         """
         self.svd_rank = svd_rank
         self.opt = opt
         self.lag = lag
         self.delta_t = delta_t
-        self.use_jax_opt = use_jax_opt
-        if self.use_jax_opt and JAX_BUILD_INSTALLED:
+        self.use_jax_opt = use_jax_opt & JAX_BUILD_INSTALLED
+        if self.use_jax_opt:
             self._DOT = jit(lambda X, Y: X @ Y)
             self._ELEMWISE_DOT = jit(lambda X, y: X * y)
             self._COMPUTE_SVD = jit(npjax.linalg.svd)
@@ -165,7 +164,7 @@ class STDMD(object):
         :param sampling_rate: how much timesteps in one second
         :param lag: which shift to choose for linear dynamic system X1 = A_tilde @ X0
         :param n_jobs: how much processes to parallelize computation into
-        :param use_jax_opt: enable JAX numerical algebra optimizations (jit, running on GPU)
+        :param use_jax_opt: enable JAX numerical algebra optimizations (jit, running on GPU), if available
         :param verbose: use crossbar to show process compliteness
         """
         self.frame_length = frame_length
@@ -178,7 +177,7 @@ class STDMD(object):
         self.lag = lag
         _n_cpus = mp.cpu_count()
         self.n_jobs = _n_cpus if n_jobs == -1 or n_jobs >= _n_cpus else n_jobs
-        self.use_jax_opt = use_jax_opt
+        self.use_jax_opt = use_jax_opt & JAX_BUILD_INSTALLED
         self.verbose = verbose
         
         self.rank = self.n_channels
